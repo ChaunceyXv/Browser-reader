@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         聚合搜索引擎工具栏
 // @namespace    https://www.via.com
-// @version      2.11.8
-// @description  移动端浏览器脚本：仅域名白名单生效。下滑显示工具栏，触摸不倒计时，离开后计时。主题跟随，支持编辑引擎，油猴菜单栏打开管理界面。内置5大搜索引擎，设置按钮固定右侧。
+// @version      2.11.9
+// @description  移动端浏览器脚本：仅域名白名单生效。下滑显示工具栏，触摸不倒计时，离开后计时。主题跟随，支持编辑引擎，油猴菜单栏打开管理界面。内置7大搜索引擎，设置按钮固定右侧。
 // @author       Assistant
 // @match        *://*/*
 // @grant        GM_setValue
@@ -20,7 +20,9 @@
         { name: 'Baidu', url: 'https://m.baidu.com/s?wd=%s' },
         { name: 'Yandex', url: 'https://yandex.com/search/?text=%s' },
         { name: 'Brave', url: 'https://search.brave.com/search?q=%s' },
-        { name: 'DuckGo', url: 'https://duckduckgo.com/?q=%s' }
+        { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=%s' },
+        { name: 'Google.HK', url: 'https://www.google.com.hk/search?q=%s' },
+        { name: 'Google', url: 'https://www.google.com/search?q=%s' }
     ];
 
     const STORAGE_KEY = 'AggSearchEngines';
