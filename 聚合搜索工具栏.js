@@ -18,7 +18,7 @@
     const DEFAULT_ENGINES = [
         { name: 'Bing', url: 'https://cn.bing.com/search?q=%s' },
         { name: 'Baidu', url: 'https://m.baidu.com/s?wd=%s' },
-        { name: 'Yandex', url: 'https://yandex.com/search/touch/?text=%s' },
+        { name: 'Yandex', url: 'https://yandex.com/search/?text=%s' },
         { name: 'Brave', url: 'https://search.brave.com/search?q=%s' },
         { name: 'DuckGo', url: 'https://duckduckgo.com/?q=%s' }
     ];
