@@ -1,2 +1,2 @@
-# Browser-reader
-浏览器阅读模式增强插件
+# Browser-plug-in
+一些自用的浏览器脚本
