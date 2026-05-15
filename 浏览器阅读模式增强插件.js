@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         阅读模式增强插件
 // @namespace    https://viayoo.com/
-// @version      12.24
+// @version      12.27.3
 // @match        *://*/*
 // @run-at       document-end
 // @grant        GM_setValue
@@ -32,7 +32,28 @@
     function saveSettings() { GM_setValue(STORAGE_KEY, settings); }
     function saveRules() { GM_setValue(CUSTOM_RULES_KEY, customRules); }
     function saveAutoEnter() { GM_setValue(AUTO_ENTER_KEY, autoEnterRules); }
-    function getDomain() { return window.location.hostname.split('.').slice(-2).join('.'); }
+    
+    function getDomain() { 
+        const hostname = window.location.hostname;
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return hostname;
+        const parts = hostname.split('.');
+        return parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
+    }
+    
+    function getDomainFromUrl(url) {
+        try {
+            const hostname = new URL(url).hostname;
+            if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return hostname;
+            const parts = hostname.split('.');
+            return parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
+        } catch(e) {
+            return getDomain();
+        }
+    }
+    
+    function getPageKey() {
+        return window.location.origin + window.location.pathname;
+    }
 
     // 迁移旧的全局 autoEnter
     if (settings.autoEnter !== undefined) {
@@ -43,6 +64,25 @@
         }
         delete settings.autoEnter;
         saveSettings();
+    }
+
+    // ================== 手动退出标记处理 ==================
+    const manualExitKey = 'reader_manual_exit_' + getPageKey();
+    const exitFlag = GM_getValue(manualExitKey, 0);
+    const now = Date.now();
+    
+    let skipAutoEnter = false;
+    if (exitFlag && (now - exitFlag < 3000)) {
+        skipAutoEnter = true;
+        console.log('[阅读模式] 检测到手动退出标记，本次跳过自动进入');
+        setTimeout(() => {
+            const currentFlag = GM_getValue(manualExitKey, 0);
+            if (currentFlag === exitFlag) {
+                GM_setValue(manualExitKey, 0);
+            }
+        }, 10000);
+    } else if (exitFlag) {
+        GM_setValue(manualExitKey, 0);
     }
 
     const cfgStyle = `
@@ -83,12 +123,23 @@
     `;
     GM_addStyle(cfgStyle);
 
-    function showViaConfig() {
+    // ================== 安全的 HTML 转义函数 ==================
+    function escapeHtml(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    // ================== 配置面板 ==================
+    function showViaConfig(targetDomain) {
+        const domain = targetDomain || getDomain();
+        
         const existingManager = document.getElementById('via-site-manager');
         if (existingManager) existingManager.remove();
 
         if (document.getElementById('via-cfg-mask')) return;
-        const domain = getDomain();
+        
         const rule = customRules[domain] || { title: '', content: '', next: '', filter: '' };
         const autoEnterEnabled = !!autoEnterRules[domain];
 
@@ -106,7 +157,7 @@
         mask.innerHTML = `
             <div class="via-box">
                 <div class="via-close">✕</div>
-                <div class="via-title">⚙️ 配置面板 - ${domain}</div>
+                <div class="via-title">⚙️ 配置面板 - ${escapeHtml(domain)}</div>
                 <button class="via-btn via-btn-primary" id="site-manager-btn">📋 网址管理</button>
                 <div class="toggle-switch">
                     <span>点击翻页</span>
@@ -215,7 +266,7 @@
                     <div class="site-item" data-domain="${escapeHtml(domain)}">
                         <div class="site-info site-domain-clickable" data-domain="${escapeHtml(domain)}">
                             <div class="site-domain">${escapeHtml(domain)}</div>
-                            ${detail ? `<div class="site-detail">${detail}</div>` : ''}
+                            ${detail ? `<div class="site-detail">${escapeHtml(detail)}</div>` : ''}
                         </div>
                         <div class="site-auto-row">
                             <span class="site-auto-label">自动阅读</span>
@@ -262,7 +313,7 @@
             el.onclick = () => {
                 const domain = el.getAttribute('data-domain');
                 mask.remove();
-                showViaConfigForDomain(domain);
+                showViaConfig(domain);
             };
         });
 
@@ -293,129 +344,12 @@
         };
     }
 
-    function showViaConfigForDomain(targetDomain) {
-        const cfgMask = document.getElementById('via-cfg-mask');
-        if (cfgMask) cfgMask.remove();
-
-        const rule = customRules[targetDomain] || { title: '', content: '', next: '', filter: '' };
-        const autoEnterEnabled = !!autoEnterRules[targetDomain];
-
-        let effectivePlaceholder = '';
-        if (rule.content) {
-            effectivePlaceholder = '自定义';
-        } else {
-            effectivePlaceholder = '空';
-        }
-
-        const mask = document.createElement('div');
-        mask.id = 'via-cfg-mask';
-        mask.innerHTML = `
-            <div class="via-box">
-                <div class="via-close">✕</div>
-                <div class="via-title">⚙️ 配置面板 - ${escapeHtml(targetDomain)}</div>
-                <button class="via-btn via-btn-primary" id="site-manager-btn">📋 网址管理</button>
-                <div class="toggle-switch">
-                    <span>点击翻页</span>
-                    <label class="toggle-label">
-                        <input type="checkbox" id="click-page-toggle" ${settings.clickPage ? 'checked' : ''}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="toggle-switch">
-                    <span>自动进入阅读模式</span>
-                    <label class="toggle-label">
-                        <input type="checkbox" id="auto-enter-toggle" ${autoEnterEnabled ? 'checked' : ''}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <div class="via-hint">自动阅读模式已匹配大部分规则，非正文误判请自定义正文选择器来规避</div>
-                </div>
-                <span class="via-label">章节标题选择器</span>
-                <input type="text" id="via-t" class="via-input" placeholder=".chapter-title" value="${escapeHtml(rule.title || '')}">
-                <span class="via-label">正文内容选择器</span>
-                <input type="text" id="via-c" class="via-input" placeholder="${effectivePlaceholder}" value="${escapeHtml(rule.content || '')}">
-                <span class="via-label">下一页选择器</span>
-                <input type="text" id="via-n" class="via-input" placeholder=".next-page" value="${escapeHtml(rule.next || '')}">
-                <span class="via-label">过滤选择器（与内置规则同时生效）</span>
-                <input type="text" id="via-f" class="via-input" placeholder=".ad, .banner, .tips, .share" value="${escapeHtml(rule.filter || '')}">
-            </div>`;
-        document.body.appendChild(mask);
-
-        const clickPageToggle = document.getElementById('click-page-toggle');
-        const autoEnterToggle = document.getElementById('auto-enter-toggle');
-        const titleInput = document.getElementById('via-t');
-        const contentInput = document.getElementById('via-c');
-        const nextInput = document.getElementById('via-n');
-        const filterInput = document.getElementById('via-f');
-        const closeBtn = mask.querySelector('.via-close');
-        const siteManagerBtn = document.getElementById('site-manager-btn');
-
-        function saveCurrentRules() {
-            const t = titleInput.value.trim();
-            const c = contentInput.value.trim();
-            const n = nextInput.value.trim();
-            const f = filterInput.value.trim();
-            if (!t && !c && !n && !f) {
-                delete customRules[targetDomain];
-            } else {
-                customRules[targetDomain] = { title: t, content: c, next: n, filter: f };
-            }
-            saveRules();
-        }
-
-        clickPageToggle.onchange = () => {
-            settings.clickPage = clickPageToggle.checked;
-            saveSettings();
-        };
-        autoEnterToggle.onchange = () => {
-            autoEnterRules[targetDomain] = autoEnterToggle.checked;
-            saveAutoEnter();
-        };
-
-        titleInput.addEventListener('blur', saveCurrentRules);
-        contentInput.addEventListener('blur', saveCurrentRules);
-        nextInput.addEventListener('blur', saveCurrentRules);
-        filterInput.addEventListener('blur', saveCurrentRules);
-
-        closeBtn.onclick = () => {
-            saveCurrentRules();
-            mask.remove();
-        };
-
-        siteManagerBtn.onclick = () => {
-            saveCurrentRules();
-            showSiteManager();
-        };
-    }
-
-    function escapeHtml(str) {
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
-    }
-
-    GM_registerMenuCommand("⚙️ 配置面板", showViaConfig);
-
-    // ================== 手动退出标记处理 ==================
-    const getPageKey = () => {
-        return window.location.origin + window.location.pathname;
-    };
-    const manualExitKey = 'reader_manual_exit_' + getPageKey();
-    const exitFlag = GM_getValue(manualExitKey, 0);
-    const now = Date.now();
-    if (exitFlag && (now - exitFlag < 3000)) {
-        GM_setValue(manualExitKey, 0);
-        var skipAutoEnter = true;
-        console.log('[阅读模式] 检测到手动退出标记，本次跳过自动进入');
-    } else {
-        if (exitFlag) GM_setValue(manualExitKey, 0);
-        var skipAutoEnter = false;
-    }
+    GM_registerMenuCommand("⚙️ 配置面板", () => showViaConfig());
 
     // ================== 创建阅读按钮 ==================
-    if (!document.getElementById("txtyd")) {
+    function createReaderButton() {
+        if (document.getElementById("txtyd")) return;
+        
         const btn = document.createElement("div");
         btn.id = "txtyd";
         btn.innerHTML = "📖";
@@ -507,8 +441,6 @@
         const LONG_PRESS_DURATION = 500;
         const MOVE_TOLERANCE = 10;
 
-        let totalMoveX = 0, totalMoveY = 0;
-
         const clearLongPress = () => {
             if (longPressTimer) {
                 clearTimeout(longPressTimer);
@@ -537,8 +469,6 @@
             isDragging = true;
             hasMoved = false;
             isLongPressed = false;
-            totalMoveX = 0;
-            totalMoveY = 0;
             btn.style.cursor = "grabbing";
             btn.style.transition = "none";
             if (e.cancelable) e.preventDefault();
@@ -561,20 +491,14 @@
             
             let dx = clientX - dragStartX;
             let dy = clientY - dragStartY;
-            totalMoveX = dx;
-            totalMoveY = dy;
             let distance = Math.sqrt(dx*dx + dy*dy);
             
             if (distance > MOVE_TOLERANCE) {
                 clearLongPress();
-                if (!hasMoved) {
-                    hasMoved = true;
-                }
+                if (!hasMoved) hasMoved = true;
                 if (dragAnimationFrame) cancelAnimationFrame(dragAnimationFrame);
                 dragAnimationFrame = requestAnimationFrame(() => {
-                    let newLeft = dragStartLeft + dx;
-                    let newTop = dragStartTop + dy;
-                    setButtonBasePosition(newLeft, newTop);
+                    setButtonBasePosition(dragStartLeft + dx, dragStartTop + dy);
                 });
             }
         };
@@ -595,8 +519,6 @@
             }
             hasMoved = false;
             isLongPressed = false;
-            totalMoveX = 0;
-            totalMoveY = 0;
         };
 
         btn.addEventListener("mousedown", onDragStart);
@@ -613,41 +535,50 @@
                 GM_setValue("reader_btn_pos", { left: btnLeft, top: btnTop });
             }
         });
+    }
 
-        if (autoEnterRules[getDomain()] && !skipAutoEnter) {
-            function checkAndEnter() {
-                if (document.getElementById("reader-toolbar")) return;
-                const doc = document;
-                const domain = getDomain();
-                const rule = customRules[domain] || {};
-                let foundNode = null;
-                if (rule.content) {
-                    foundNode = doc.querySelector(rule.content);
-                } else {
-                    const contentSelectors = [
-                        "#chaptercontent", "#nr", "#content", ".content", ".page-content",
-                        "#contentn", ".txtnav", ".isTxt.chapter-content", ".con", "#novelcontent",
-                        ".read-content", ".article-content", ".chapterCon",
-                        '[id^="cont"]'
-                    ];
-                    for (let s of contentSelectors) {
-                        let node = doc.querySelector(s);
-                        if (node && node.innerText.length > 200) {
-                            foundNode = node;
-                            break;
-                        }
+    // ================== 自动进入阅读模式检测 ==================
+    function tryAutoEnter() {
+        if (!autoEnterRules[getDomain()] || skipAutoEnter) return;
+        if (window._readingModeActive || document.getElementById("reader-toolbar")) return;
+        
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', () => {
+                setTimeout(tryAutoEnter, 500);
+            });
+            return;
+        }
+        
+        setTimeout(() => {
+            if (window._readingModeActive || document.getElementById("reader-toolbar")) return;
+            
+            const domain = getDomain();
+            const rule = customRules[domain] || {};
+            let foundNode = null;
+            
+            if (rule.content) {
+                foundNode = document.querySelector(rule.content);
+            } else {
+                const contentSelectors = [
+                    "#chaptercontent", "#nr", "#content", ".content", ".page-content",
+                    "#contentn", ".txtnav", ".isTxt.chapter-content", ".con", "#novelcontent",
+                    ".read-content", ".article-content", ".chapterCon",
+                    '[id^="cont"]'
+                ];
+                for (let s of contentSelectors) {
+                    let node = document.querySelector(s);
+                    if (node && node.innerText.length > 200) {
+                        foundNode = node;
+                        break;
                     }
                 }
-                if (foundNode && foundNode !== document.body) {
-                    enterReaderMode();
-                }
             }
-            if (document.readyState === "loading") {
-                window.addEventListener('DOMContentLoaded', checkAndEnter);
-            } else {
-                checkAndEnter();
+            
+            if (foundNode && foundNode !== document.body && foundNode.innerText.length > 500) {
+                console.log('[阅读模式] 自动进入');
+                enterReaderMode();
             }
-        }
+        }, 200);
     }
 
     // ================== 阅读模式核心功能 ==================
@@ -655,12 +586,13 @@
         if (window._readingModeActive) return;
         window._readingModeActive = true;
 
+        const initialDomain = getDomain();
+        const initialRule = customRules[initialDomain] || {};
+
         if (window._savedContentSelector === undefined) {
-            const domain = getDomain();
-            const rule = customRules[domain] || {};
             let effectiveSelector = "";
-            if (rule.content) {
-                effectiveSelector = rule.content;
+            if (initialRule.content) {
+                effectiveSelector = initialRule.content;
             } else {
                 const contentSelectors = [
                     "#chaptercontent", "#nr", "#content", ".content", ".page-content",
@@ -699,7 +631,7 @@
             <head>
                 <meta charset="${charset}">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                <title>${originalTitle}</title>
+                <title>${escapeHtml(originalTitle)}</title>
                 <style>
                     body { margin: 0; padding: 15px; font-family: sans-serif; line-height: 1.8; overflow-x: hidden; }
                     #container { max-width: 850px; margin: 0 auto; }
@@ -740,9 +672,7 @@
                     .toolbar-btn.active {
                         background: #4CAF50;
                     }
-                    #exit-btn {
-                        color: red !important;
-                    }
+                    #exit-btn { color: red !important; }
                     .font-control {
                         display: flex;
                         background: rgba(0,0,0,0.5);
@@ -767,12 +697,8 @@
                         width: auto;
                         min-width: 32px;
                     }
-                    .font-control-item:active {
-                        opacity: 0.7;
-                    }
                     #theme-panel {
                         display: none !important;
-                        visibility: hidden !important;
                         position: fixed;
                         bottom: 80px;
                         left: 50%;
@@ -786,11 +712,9 @@
                         gap: 12px;
                         z-index: 2147483647;
                         max-width: 90%;
-                        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
                     }
                     #theme-panel.show {
                         display: flex !important;
-                        visibility: visible !important;
                     }
                     ${cfgStyle}
                 </style>
@@ -813,7 +737,13 @@
             </html>
         `;
 
+        const savedSettings = { ...settings };
+        const savedContentSelector = window._savedContentSelector;
+
         document.open(); document.write(readerHTML); document.close();
+
+        settings = savedSettings;
+        window._savedContentSelector = savedContentSelector;
 
         const contentArea = document.getElementById("content-area");
         const loadingDiv = document.getElementById("loading");
@@ -829,10 +759,10 @@
         themePanel.classList.remove("show");
 
         let toolbarVisible = true;
-        let startTouchY = 0;
-        window.addEventListener('touchstart', e => { startTouchY = e.touches[0].clientY; }, {passive:true});
+        let startToolbarY = 0;
+        window.addEventListener('touchstart', e => { startToolbarY = e.touches[0].clientY; }, {passive:true});
         window.addEventListener('touchend', e => {
-            let diff = startTouchY - e.changedTouches[0].clientY;
+            let diff = startToolbarY - e.changedTouches[0].clientY;
             if (Math.abs(diff) > 30) {
                 if (diff < 0) {
                     if (!toolbarVisible) { toolbar.classList.remove("hidden"); toolbarVisible = true; }
@@ -843,36 +773,30 @@
         }, {passive:true});
 
         function applySettings() {
-            const [bg, text, texture] = settings.theme.split("-");
+            const parts = settings.theme.split("-");
+            const bg = parts[0];
+            const text = parts[1] || "#000";
+            const texture = parts[2] || "";
             document.body.style.backgroundColor = bg;
-            document.body.style.color = text || "#000";
+            document.body.style.color = text;
             if (texture === "paper") {
                 document.body.style.backgroundImage = `radial-gradient(circle at 25% 40%, rgba(0,0,0,0.03) 1px, transparent 1px), radial-gradient(circle at 75% 60%, rgba(0,0,0,0.02) 1px, transparent 1px)`;
                 document.body.style.backgroundSize = "40px 40px, 60px 60px";
             } else {
                 document.body.style.backgroundImage = "none";
             }
-            contentArea.style.fontSize = settings.fontSize + "px";
-            fontSizeDisplay.innerText = settings.fontSize;
+            if (contentArea) contentArea.style.fontSize = settings.fontSize + "px";
+            if (fontSizeDisplay) fontSizeDisplay.innerText = settings.fontSize;
         }
 
         function showToast(msg) {
+            if (!document.body) return;
             let toast = document.querySelector(".toast");
             if (toast) toast.remove();
             toast = document.createElement("div");
             toast.className = "toast";
             toast.innerText = msg;
-            toast.style.position = "fixed";
-            toast.style.bottom = "80px";
-            toast.style.left = "50%";
-            toast.style.transform = "translateX(-50%)";
-            toast.style.backgroundColor = "rgba(0,0,0,0.7)";
-            toast.style.color = "#fff";
-            toast.style.padding = "6px 12px";
-            toast.style.borderRadius = "20px";
-            toast.style.fontSize = "14px";
-            toast.style.zIndex = "2147483647";
-            toast.style.pointerEvents = "none";
+            toast.style.cssText = "position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.7); color:#fff; padding:6px 12px; border-radius:20px; font-size:14px; z-index:2147483647; pointer-events:none;";
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 1500);
         }
@@ -881,14 +805,10 @@
             const themeList = themes.split(";");
             themePanel.innerHTML = "";
             themeList.forEach((t, idx) => {
-                const [bg] = t.split("-");
+                const bg = t.split("-")[0];
                 const dot = document.createElement("div");
-                dot.style.width = "40px";
-                dot.style.height = "40px";
-                dot.style.borderRadius = "50%";
+                dot.style.cssText = "width:40px; height:40px; border-radius:50%; border:2px solid rgba(255,255,255,0.5); cursor:pointer;";
                 dot.style.backgroundColor = bg;
-                dot.style.border = "2px solid rgba(255,255,255,0.5)";
-                dot.style.cursor = "pointer";
                 if (settings.theme === t) dot.style.border = "3px solid red";
                 dot.onclick = () => {
                     settings.theme = t;
@@ -916,21 +836,11 @@
             }
         });
 
-        fontDecr.onclick = () => {
-            settings.fontSize = Math.max(12, settings.fontSize - 2);
-            saveSettings();
-            applySettings();
-        };
-        fontIncr.onclick = () => {
-            settings.fontSize = Math.min(40, settings.fontSize + 2);
-            saveSettings();
-            applySettings();
-        };
+        fontDecr.onclick = () => { settings.fontSize = Math.max(12, settings.fontSize - 2); saveSettings(); applySettings(); };
+        fontIncr.onclick = () => { settings.fontSize = Math.min(40, settings.fontSize + 2); saveSettings(); applySettings(); };
         configBtn.onclick = () => showViaConfig();
-        
         exitBtn.onclick = () => {
-            const pageKey = window.location.origin + window.location.pathname;
-            const markKey = 'reader_manual_exit_' + pageKey;
+            const markKey = 'reader_manual_exit_' + getPageKey();
             GM_setValue(markKey, Date.now());
             location.reload();
         };
@@ -939,10 +849,26 @@
 
         let nextUrl = initialUrl, isLoading = false;
         const displayedUrls = new Set();
+        const MAX_CACHE_SIZE = 20;
         const prefetchedData = new Map();
         let activePrefetchCount = 0;
         const MAX_CONCURRENT_PREFETCH = 2;
         let retryTimer = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+
+        function setPrefetchCache(url, doc) {
+            if (prefetchedData.size >= MAX_CACHE_SIZE) {
+                const firstKey = prefetchedData.keys().next().value;
+                prefetchedData.delete(firstKey);
+            }
+            prefetchedData.set(url, doc);
+        }
+
+        function getRuleForUrl(url) {
+            const urlDomain = getDomainFromUrl(url);
+            return customRules[urlDomain] || initialRule;
+        }
 
         async function prefetchChain(startUrl, depth) {
             if (depth <= 0 || !startUrl) return;
@@ -962,16 +888,22 @@
                         htmlText = new TextDecoder(charsetMatch[1]).decode(buffer);
                     }
                     doc = new DOMParser().parseFromString(htmlText, "text/html");
-                    prefetchedData.set(startUrl, doc);
-                } catch(e) { console.error("预加载失败", e); activePrefetchCount--; return; }
-                finally { activePrefetchCount--; }
+                    setPrefetchCache(startUrl, doc);
+                } catch(e) { 
+                    console.error("预加载失败", e); 
+                    return; 
+                } finally { 
+                    activePrefetchCount--; 
+                }
             }
-            const domain = getDomain();
-            const rule = customRules[domain] || {};
+            
+            const rule = getRuleForUrl(startUrl);
             let newNextUrl = "";
             if (rule.next) {
                 let el = doc.querySelector(rule.next);
-                if (el) newNextUrl = el.href;
+                if (el && el.tagName === 'A' && el.href && !el.href.startsWith("javascript:")) {
+                    newNextUrl = el.href;
+                }
             }
             if (!newNextUrl) {
                 const allLinks = doc.querySelectorAll("a");
@@ -979,14 +911,16 @@
                 for (let a of allLinks) {
                     if (nextReg.test(a.innerText)) {
                         let h = a.getAttribute("href");
-                        if (h && !h.startsWith("javascript")) {
+                        if (h && !h.startsWith("javascript:")) {
                             newNextUrl = new URL(h, startUrl).href;
                             break;
                         }
                     }
                 }
             }
-            if (newNextUrl && depth > 1) await prefetchChain(newNextUrl, depth-1);
+            if (newNextUrl && depth > 1) {
+                prefetchChain(newNextUrl, depth-1).catch(e => console.error("预加载链中断", e));
+            }
         }
 
         function extractContentFromDoc(doc, rule) {
@@ -1023,7 +957,7 @@
                 clone.querySelectorAll('div,p').forEach(el => { el.prepend('\n'); el.append('\n'); });
                 mainHTML = clone.innerText.replace(/\r\n|\r/g, "\n").split("\n")
                     .map(l => l.trim()).filter(l => l.length > 0)
-                    .map(l => `<p>${l}</p>`).join("");
+                    .map(l => `<p>${escapeHtml(l)}</p>`).join("");
             }
             return { title, mainHTML };
         }
@@ -1050,14 +984,16 @@
                     }
                     doc = new DOMParser().parseFromString(htmlText, "text/html");
                 }
-                const domain = getDomain();
-                const rule = customRules[domain] || {};
+                
+                const rule = getRuleForUrl(url);
                 const { title, mainHTML } = extractContentFromDoc(doc, rule);
                 if (mainHTML.length < 100 && url !== initialUrl) throw new Error("内容过短");
                 let newNextUrl = "";
                 if (rule.next) {
                     let el = doc.querySelector(rule.next);
-                    if (el) newNextUrl = el.href;
+                    if (el && el.tagName === 'A' && el.href && !el.href.startsWith("javascript:")) {
+                        newNextUrl = el.href;
+                    }
                 }
                 if (!newNextUrl) {
                     const allLinks = doc.querySelectorAll("a");
@@ -1065,7 +1001,7 @@
                     for (let a of allLinks) {
                         if (nextReg.test(a.innerText)) {
                             let h = a.getAttribute("href");
-                            if (h && !h.startsWith("javascript")) {
+                            if (h && !h.startsWith("javascript:")) {
                                 newNextUrl = new URL(h, url).href;
                                 break;
                             }
@@ -1073,21 +1009,27 @@
                     }
                 }
                 const sec = document.createElement("div");
-                sec.innerHTML = `<div class="chapter-title">${title}</div>${mainHTML}`;
+                sec.innerHTML = `<div class="chapter-title">${escapeHtml(title)}</div>${mainHTML}`;
                 contentArea.appendChild(sec);
                 if (url !== initialUrl) history.pushState(null, originalTitle, url);
                 applySettings();
                 displayedUrls.add(url);
                 nextUrl = newNextUrl;
                 loadingDiv.innerText = nextUrl ? "滑动加载下一页" : "--- 全文完 ---";
-                if (nextUrl) prefetchChain(nextUrl, 2).catch(e=>console.error(e));
+                retryCount = 0;
+                if (nextUrl) prefetchChain(nextUrl, 2).catch(e => console.error(e));
             } catch (e) {
                 console.error("加载失败", e);
-                loadingDiv.innerText = "网络正在连接中...";
-                retryTimer = setTimeout(() => {
-                    if (nextUrl && !isLoading && !displayedUrls.has(nextUrl)) fetchContent(nextUrl);
-                    retryTimer = null;
-                }, 5000);
+                retryCount++;
+                if (retryCount <= MAX_RETRIES) {
+                    loadingDiv.innerText = `加载失败，5秒后重试 (${retryCount}/${MAX_RETRIES})...`;
+                    retryTimer = setTimeout(() => {
+                        if (nextUrl && !isLoading && !displayedUrls.has(nextUrl)) fetchContent(nextUrl);
+                        retryTimer = null;
+                    }, 5000);
+                } else {
+                    loadingDiv.innerText = "加载失败，请检查网络后刷新页面";
+                }
             } finally { isLoading = false; }
         }
 
@@ -1096,12 +1038,18 @@
                 if (nextUrl && !isLoading && !displayedUrls.has(nextUrl)) fetchContent(nextUrl);
             }
         };
+        
         document.addEventListener('click', (e) => {
             if (!settings.clickPage) return;
+            if (window.getSelection().toString().length > 0) return;
             if (e.target.closest('#toolbar-container') || e.target.closest('#theme-panel') || e.target.closest('#via-cfg-mask')) return;
             const vh = window.innerHeight;
             e.clientY < vh * 0.4 ? window.scrollBy(0, -vh * 0.85) : window.scrollBy(0, vh * 0.85);
         });
         fetchContent(initialUrl);
     }
+
+    // ================== 初始化 ==================
+    createReaderButton();
+    tryAutoEnter();
 })();
